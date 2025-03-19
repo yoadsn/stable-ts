@@ -75,6 +75,7 @@ class Aligner:
             nonspeech_skip: Optional[float] = 5.0,
             fast_mode: bool = False,
             failure_threshold: Optional[float] = None,
+            initial_seek: float = None,
             **options
     ):
         """
@@ -123,6 +124,8 @@ class Aligner:
             If ``None`` and ``audio`` is a string then set to ``True`` else ``False``.
         failure_threshold : float, optional
             Abort alignment when percentage of words with zero duration exceeds ``failure_threshold``.
+        initial_seek: float, optional
+            Initial Seek into the audio source (file path sources only is supported)
         verbose : bool or None, default False
             Whether to display the text being decoded to the console.
             Displays all the details if ``True``. Displays progressbar if ``False``. Display nothing if ``None``.
@@ -220,6 +223,7 @@ class Aligner:
         self.nonspeech_skip = nonspeech_skip
         self.fast_mode = fast_mode
         self.failure_threshold = failure_threshold
+        self.initial_seek = initial_seek
 
         self._pad_mask = None
         self.failure_count = 0
@@ -284,6 +288,10 @@ class Aligner:
         ) as tqdm_pbar:
             result: List[BasicWordTiming] = []
             last_ts = 0.0
+            premature_stop = False
+            ema_breakout_warmup_ends_at = 180
+            ema_match_probs = None
+            
             while self._all_word_tokens:
 
                 self._time_offset = self._seek_sample / self.sample_rate
@@ -302,7 +310,15 @@ class Aligner:
 
                 last_ts = self._fallback(audio_segment.shape[-1])
 
-                self._update_pbar(tqdm_pbar, last_ts)
+                if self._curr_words:
+                    match_probs_ema_alpha = 0.95
+                    kept_words_probs = np.array([wt.probability for wt in self._curr_words])
+                    mean_kept_words_probs = np.mean(kept_words_probs)
+                    if ema_match_probs is None:
+                        ema_match_probs = mean_kept_words_probs
+                    ema_match_probs = mean_kept_words_probs * (1 - match_probs_ema_alpha) + ema_match_probs * match_probs_ema_alpha
+
+                self._update_pbar(tqdm_pbar, last_ts, ema_match_probs)
 
                 result.extend(self._curr_words)
 
@@ -317,11 +333,21 @@ class Aligner:
                 if self.failure_threshold is not None:
                     self.failure_count += sum(1 for wts in self._curr_words if wts.end - wts.start == 0)
                     if self.failure_count > self.max_fail:
+                        premature_stop = True
                         break
+                    
+                if (
+                    ema_breakout_warmup_ends_at < self._time_offset and
+                    ema_match_probs is not None and
+                    ema_match_probs < 0.5
+                ):
+                    premature_stop = True
+                    tqdm_pbar.write("Breaking - probs too low")
+                    break
 
-            self._update_pbar(tqdm_pbar, last_ts, self.failure_count <= self.max_fail)
+            self._update_pbar(tqdm_pbar, last_ts, ema_match_probs, self.failure_count <= self.max_fail)
 
-        if self._temp_data.word is not None:
+        if not premature_stop and self._temp_data.word is not None:
             result.append(self._temp_data.word)
         if not result:
             warnings.warn('Failed to align text.', stacklevel=2)
@@ -597,7 +623,8 @@ class Aligner:
                 stream=self.options.pre.stream,
                 denoiser=self.options.pre.denoiser,
                 denoiser_options=self.options.pre.denoiser_options,
-                only_voice_freq=self.options.pre.only_voice_freq
+                only_voice_freq=self.options.pre.only_voice_freq,
+                initial_seek=self.initial_seek
             )
         else:
             audio = AudioLoader(
@@ -606,10 +633,11 @@ class Aligner:
                 denoiser=self.options.pre.denoiser,
                 denoiser_options=self.options.pre.denoiser_options,
                 only_voice_freq=self.options.pre.only_voice_freq,
+                initial_seek=self.initial_seek,
                 verbose=self.options.progress.verbose,
                 new_chunk_divisor=512,
                 stream=self.options.pre.stream,
-                only_ffmpeg=self.options.pre.only_ffmpeg
+                only_ffmpeg=self.options.pre.only_ffmpeg,
             )
 
         self.audio_loader = audio
@@ -1013,13 +1041,16 @@ class Aligner:
             result.update_nonspeech_sections(*nonspeech_timings)
             result.set_current_as_orig()
 
-    def _update_pbar(self, tqdm_pbar: tqdm, last_ts: float, finish: bool = False):
+    def _update_pbar(self, tqdm_pbar: tqdm, last_ts: float, ema_match_probs: float = 0, finish: bool = False):
         curr_total = self.audio_loader.get_duration(2)
         if need_refresh := curr_total != tqdm_pbar.total:
             tqdm_pbar.total = curr_total
         tqdm_pbar.update((curr_total if finish else min(round(last_ts, 2), curr_total)) - tqdm_pbar.n)
+        if ema_match_probs is not None:
+            tqdm_pbar.set_postfix({"probs": round(ema_match_probs, 2) })
         if need_refresh:
             tqdm_pbar.refresh()
+        
         if self.options.progress.progress_callback is not None:
             self.options.progress.progress_callback(tqdm_pbar.n, tqdm_pbar.total)
 

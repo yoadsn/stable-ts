@@ -169,6 +169,7 @@ class AudioLoader:
             demucs_options: Optional[dict] = None,
             load_sections: Optional[List[Tuple[float, Union[float, None]]]] = None,
             negate_load: bool = False,
+            initial_seek: float = None,
     ):
         if stream and not isinstance(source, str):
             raise NotImplementedError(f'``stream=True`` only supported for string ``source`` but got {type(source)}.')
@@ -186,6 +187,7 @@ class AudioLoader:
             buffer_size = (sr * 30)
         self._buffer_size = self._valid_buffer_size(self.parse_chunk_size(buffer_size))
         self._stream = isinstance(source, str) if stream is None else stream
+        self._initial_seek = initial_seek
         self._accum_samples = 0
         self.verbose = verbose
         self.only_ffmpeg = only_ffmpeg
@@ -203,6 +205,8 @@ class AudioLoader:
         self._final_samples_to_save = []
         metadata = get_metadata(source)
         self._source_sr, self._duration_estimation = metadata['sr'] or 0, metadata['duration'] or 0
+        if self._duration_estimation > 0 and self._initial_seek > 0:
+            self._duration_estimation -= self._initial_seek
         self._total_sample_estimation = round(self._duration_estimation * self._sr)
         self._denoise_model, self._min_chunk = self._load_denoise_model()
         self.check_min_chunk_requirement()
@@ -583,6 +587,10 @@ class AudioLoader:
                 "-ar", str(self._sr),
                 "-"
             ]
+            if self._initial_seek:
+                # Insert at the forth element
+                cmd.insert(3, "-ss")
+                cmd.insert(4, str(self._initial_seek))
             out = subprocess.Popen(cmd, stdin=stdin, stdout=subprocess.PIPE)
 
         except subprocess.SubprocessError as e:
@@ -597,7 +605,8 @@ class AudioLoader:
             stream=None,
             denoiser=None,
             denoiser_options=None,
-            only_voice_freq=False
+            only_voice_freq=False,
+            initial_seek=None
     ):
         if sr and sr != self._sr:
             raise ValueError(
@@ -635,7 +644,13 @@ class AudioLoader:
                 '``only_voice_freq=True`` will have no effect unless specified at AudioLoader initialization.',
                 stacklevel=2
             )
-        return self._stream, self._denoiser, self._denoiser_options, self._only_voice_freq
+        
+        if initial_seek and initial_seek != self._initial_seek:
+            raise ValueError(
+                f'AudioLoader must be initialized with ``initial_seek={sr}`` but ``initial_seek`` of this instance is {self._initial_seek}.'
+            )
+        
+        return self._stream, self._denoiser, self._denoiser_options, self._only_voice_freq, self._initial_seek
 
 
 def audioloader_not_supported(audio):
