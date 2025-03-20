@@ -75,7 +75,6 @@ class Aligner:
             nonspeech_skip: Optional[float] = 5.0,
             fast_mode: bool = False,
             failure_threshold: Optional[float] = None,
-            initial_seek: float = None,
             **options
     ):
         """
@@ -124,8 +123,6 @@ class Aligner:
             If ``None`` and ``audio`` is a string then set to ``True`` else ``False``.
         failure_threshold : float, optional
             Abort alignment when percentage of words with zero duration exceeds ``failure_threshold``.
-        initial_seek: float, optional
-            Initial Seek into the audio source (file path sources only is supported)
         verbose : bool or None, default False
             Whether to display the text being decoded to the console.
             Displays all the details if ``True``. Displays progressbar if ``False``. Display nothing if ``None``.
@@ -223,7 +220,6 @@ class Aligner:
         self.nonspeech_skip = nonspeech_skip
         self.fast_mode = fast_mode
         self.failure_threshold = failure_threshold
-        self.initial_seek = initial_seek
 
         self._pad_mask = None
         self.failure_count = 0
@@ -624,7 +620,6 @@ class Aligner:
                 denoiser=self.options.pre.denoiser,
                 denoiser_options=self.options.pre.denoiser_options,
                 only_voice_freq=self.options.pre.only_voice_freq,
-                initial_seek=self.initial_seek
             )
         else:
             audio = AudioLoader(
@@ -633,7 +628,6 @@ class Aligner:
                 denoiser=self.options.pre.denoiser,
                 denoiser_options=self.options.pre.denoiser_options,
                 only_voice_freq=self.options.pre.only_voice_freq,
-                initial_seek=self.initial_seek,
                 verbose=self.options.progress.verbose,
                 new_chunk_divisor=512,
                 stream=self.options.pre.stream,

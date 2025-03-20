@@ -173,6 +173,9 @@ class AudioLoader:
     ):
         if stream and not isinstance(source, str):
             raise NotImplementedError(f'``stream=True`` only supported for string ``source`` but got {type(source)}.')
+        if initial_seek > 0 and not isinstance(source, str):
+            raise NotImplementedError(f'``initial_seek`` only supported for string ``source`` but got {type(source)}.')
+        
         self.source = source
         if sr is None:
             from whisper.audio import SAMPLE_RATE
@@ -205,7 +208,12 @@ class AudioLoader:
         self._final_samples_to_save = []
         metadata = get_metadata(source)
         self._source_sr, self._duration_estimation = metadata['sr'] or 0, metadata['duration'] or 0
-        if self._duration_estimation > 0 and self._initial_seek > 0:
+        
+        # if a source file is started with an initial seek - adjust the estimated duration
+        if self._duration_estimation > 0 and (
+            self._initial_seek > 0 and
+            not isinstance(source, (np.ndarray, torch.Tensor))
+        ):
             self._duration_estimation -= self._initial_seek
         self._total_sample_estimation = round(self._duration_estimation * self._sr)
         self._denoise_model, self._min_chunk = self._load_denoise_model()
