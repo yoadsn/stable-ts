@@ -1,3 +1,7 @@
+> [!NOTE] 
+> **Development on this repository is indefinitely paused.** 
+> This will remain the case for the foreseeable future.
+
 # Stabilizing Timestamps for Whisper
 
 This library modifies [Whisper](https://github.com/openai/whisper) to produce more reliable timestamps and extends its functionality.
